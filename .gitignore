@@ -10,3 +10,7 @@ venv/
 # IDE
 .idea/
 .vscode/
+
+# Dataset — organizer-provided, not part of the submission
+dataset/
+eval/
