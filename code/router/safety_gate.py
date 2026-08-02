@@ -183,6 +183,30 @@ _DIRECT_SOLICITATION_PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
     )
 )
 
+# The subset of solicitations that are decisive on their own. Legitimate
+# senders do not ask for one-time codes, and do not send the reader to a named
+# external domain to "verify". The generic calls to action above ("tap below",
+# "open the link") are deliberately excluded: real brands use them constantly,
+# and treating them as decisive would mute legitimate notices such as a
+# verified sender's traffic-challan reminder.
+#
+# Nouns are tighter here than in the set above: bare "card" and "code" would
+# match "menu card" and "discount code", so they are qualified.
+_DECISIVE_SOLICITATION_PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
+    re.compile(p, re.I)
+    for p in (
+        r"\b(confirm|enter|upload|submit|send|share|provide|reply\s+with)\b"
+        r"[^.!?]{0,40}\b(otp|pin|password|cvv|kyc|pan|credentials|"
+        r"bank\s+details|card\s+(number|pin|details)|login\s+code|"
+        r"\d\s*digit\s+code)\b",
+        r"\b(verify|confirm|complete|update)\b[^.!?]{0,40}"
+        r"\b(at|on|through|via)\b[^.!?]{0,25}"
+        r"\b[a-z0-9][a-z0-9-]*\.[a-z]{2,}\b",
+        r"\bpay\s+(now|rs\.?\s*\d)\b[^.!?]{0,40}\b(link|qr|upi|account)\b",
+        r"\bscan\s+this\s+qr\b",
+    )
+)
+
 _NEGATION_WINDOW: Final[int] = 40
 _NEGATION_CUE: Final[re.Pattern[str]] = re.compile(
     r"\b(do\s+not|don'?t|never|no\s+one|nobody|avoid|refuse|without)\b", re.I
@@ -347,6 +371,16 @@ def has_direct_solicitation(text: str) -> bool:
     return _any_match(_DIRECT_SOLICITATION_PATTERNS, text, skip_negated=True)
 
 
+def has_decisive_solicitation(text: str) -> bool:
+    """Whether the text makes a request no legitimate sender would make.
+
+    Strong enough to stand alone. Asking for a one-time code, or directing the
+    reader to a named external domain to "verify", is phishing by construction
+    rather than by accumulation of weak hints.
+    """
+    return _any_match(_DECISIVE_SOLICITATION_PATTERNS, text, skip_negated=True)
+
+
 def evaluate(
     message_row: pd.Series,
     business_index: Mapping[str, pd.Series],
@@ -389,7 +423,24 @@ def evaluate(
             "message discusses or warns about fraud rather than attempting it"
         )
 
-    # 3. Combine sender and text evidence.
+    # 3. A decisive solicitation needs no corroboration. Hedged phrasing
+    #    ("profile may be temporarily blocked") defeats the urgency patterns,
+    #    so requiring a second signal would let plain phishing through.
+    if has_decisive_solicitation(text):
+        return SafetyVerdict(
+            triggered=True,
+            action="mute",
+            message_type="scam",
+            signals=tuple(
+                sorted(sender_risk.signals | text_signals | {"direct_solicitation"})
+            ),
+            rationale=_describe(
+                sender_risk.signals,
+                text_signals or frozenset({"credential_request"}),
+            ),
+        )
+
+    # 4. Otherwise combine sender and text evidence.
     required = (
         1 if sender_risk.is_suspicious else MIN_TEXT_SIGNALS_UNCORROBORATED
     )
@@ -403,7 +454,7 @@ def evaluate(
             rationale=_describe(sender_risk.signals, text_signals),
         )
 
-    # 4. A suspicious sender with no fraud language is unwanted bulk mail
+    # 5. A suspicious sender with no fraud language is unwanted bulk mail
     #    rather than an attack: still muted, but typed as spam.
     if sender_risk.is_suspicious:
         return SafetyVerdict(

@@ -4,8 +4,9 @@ version = "0.1.0"
 description = "WhatsApp notification router for HackerRank Orchestrate (Aug 2026)."
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "anthropic>=0.40",
+    "google-genai>=2.16.0",
     "pandas>=2.2",
+    "pydantic>=2.13.4",
     "python-dotenv>=1.0",
     "scikit-learn>=1.5",
 ]
