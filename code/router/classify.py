@@ -143,8 +143,10 @@ def _format_sender_context(
         lines.append(f"forwarded_count: {forwarded}")
     if business_row is not None:
         verified = bool(business_row.get("verified"))
-        official = str(business_row.get("official_domain") or "")
-        used = str(business_row.get("domain_used_by_sender") or "")
+        official_val = business_row.get("official_domain")
+        official = "" if pd.isna(official_val) else str(official_val)
+        used_val = business_row.get("domain_used_by_sender")
+        used = "" if pd.isna(used_val) else str(used_val)
         domain_match = bool(official) and official == used
         lines.append(
             f"business sender: verified={verified}, "
@@ -157,19 +159,33 @@ def _format_sender_context(
 
 _SYSTEM_INSTRUCTIONS: Final[str] = """\
 You are the classification stage of a WhatsApp notification router. A \
-deterministic safety gate already ran before this call and found nothing \
-unsafe about this specific message, so you are not being asked to detect \
-scams here — only to route a message that has already cleared that check.
+deterministic safety gate ran before this call and did not flag this \
+message. That gate is a first line of defence, not the only one: it matches \
+English fraud patterns, so it can miss a scam written in another language or \
+in romanized/transliterated form. If this message is itself a scam, say so.
 
 Decide three things: action, message_type, and a one-sentence reason. \
 Follow this decision hierarchy in order:
 
-1. If relevant history is shown below, the reaction to that past message is \
-the strongest signal for action:
+1. If the message is itself an attempt to defraud the reader, it is \
+mute + scam, no matter what the history below shows. Judge intent by \
+MEANING, not language: messages here are often code-mixed (romanized Hindi \
+/ Hinglish, e.g. "OTP abhi batao", "link open karke code daal do", "account \
+block ho jayega"), and a scam does not stop being a scam because it is not \
+written in English. Treat as scam any message that asks the reader for a \
+one-time code, OTP, PIN, password, card or bank details; or pressures them \
+to open an unfamiliar link or pay to avoid an account being blocked, \
+suspended, or expiring. For a message that IS such a scam, a past reaction \
+of "opened" does not make it safe — users open scams. This caveat applies \
+ONLY to scam messages; it is not a reason to distrust reaction history \
+anywhere else.
+2. Otherwise — and this covers most messages — the reaction to the past \
+message shown below is the strongest signal for action, and you should \
+follow it rather than your own impression of how urgent the text sounds:
    - opened AND replied -> notify
    - opened but not replied -> digest
    - dismissed OR muted OR reported -> mute
-2. If no relevant history is shown, decide from the message content and \
+3. If no relevant history is shown, decide from the message content and \
 sender trust context: verified senders with matching domains and messages \
 the user has an existing relationship with lean toward notify/digest; \
 generic bulk content with no established relationship leans toward digest \

@@ -11,9 +11,13 @@ uv python install 3.11.9
 uv sync
 ```
 
-Requires `GEMINI_API_KEY` in a `.env` file at the repo root (read via
-`python-dotenv`; never hardcoded, never committed). Get a key at
-[aistudio.google.com](https://aistudio.google.com).
+Requires `GEMINI_API_KEY`, either as an environment variable or in a `.env`
+file at the package root — the directory holding `pyproject.toml`, alongside
+`code/` and `cache/` (read via `python-dotenv`; never hardcoded, never
+committed). Get a key at [aistudio.google.com](https://aistudio.google.com).
+
+The dataset is not bundled: place the organizer-provided `dataset/` directory
+at that same root before running.
 
 ## Run
 
@@ -81,7 +85,20 @@ with headroom — 4 still produced 429 bursts in testing). Every call retries
 on 429/5xx with the API's own suggested delay when present, exponential
 backoff otherwise. A distinct daily-quota 429 fails fast instead of retrying,
 since retrying a day-scoped limit only burns more of the same exhausted
-budget.
+budget. That path is not theoretical: the free tier's 500-requests/day
+ceiling was reached during final verification, and because `main.py`
+converts any per-message failure into a safe fallback row rather than
+crashing, the run completed with 73 of 110 rows silently degraded to
+`digest`. Writing to a scratch path via `--out` and diffing before promoting
+is what caught it — a full run that "succeeds" is not evidence the output is
+good; check the `source distribution` line.
+
+Calls use `temperature=0`. Left unset, identical input produced different
+routing across runs (measured: one borderline row returned `digest` twice
+and `notify` once), which makes a diff between two outputs unreadable —
+you cannot tell a real change from sampling noise. AGENTS.md §6.3 asks for
+deterministic behavior where possible; greedy decoding delivers it for the
+LLM stage, and the safety gate is deterministic by construction.
 
 ## Deliberate scope decisions
 
@@ -102,11 +119,20 @@ override for cases too risky to leave to a model — prompt injection above
 all. Code-mixed intent detection (e.g. "OTP leak ho gaya hai... verification
 code abhi batao") is contextual judgment an LLM handles natively; the risk
 *nouns* survive transliteration into English regex, but the intent-bearing
-verbs don't, so the gate structurally can't reach ~6% of `messages.csv`
-(7/110 rows) this way. Adding narrow single-language patterns this late
-risked new bugs for limited benefit. The known cases (`msg_070`, `msg_079`,
-`msg_072`) are scams the gate will not catch by design; the LLM layer is
-expected to catch them from content alone.
+verbs don't, so the gate structurally can't reach every such message this
+way. Adding narrow single-language patterns risked new bugs for limited
+benefit.
+
+That delegation only became real after measurement. A pre-submission audit
+of the full prediction set found the classification prompt had been telling
+the model a gate "already ran … so you are not being asked to detect scams
+here" — which suppressed exactly the judgment the delegation depends on. Two
+of the three known code-mixed scams were being caught by the gate anyway (on
+the surviving noun "OTP"); the third was routed as `digest`. The prompt now
+states a scam overrides engagement history in any language, and the gate
+remains English-only as designed. This also corrected a sharper failure the
+audit surfaced: a QR-payment scam whose past reaction was `opened,replied`
+had been routed to `notify` — engagement history actively promoting fraud.
 
 ## Media caching
 

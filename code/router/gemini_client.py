@@ -244,6 +244,14 @@ def generate_structured(prompt: str, schema: type[BaseModel]) -> str:
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema,
+            # AGENTS.md §6.3: "Keep behavior deterministic where possible."
+            # Left unset, identical input produced different routing across
+            # runs — measured, not assumed: one borderline row returned
+            # `digest` on two runs and `notify` on a third with no input
+            # change. Greedy decoding makes a re-run reproducible, so a diff
+            # between two outputs reflects a real code change rather than
+            # sampling noise.
+            temperature=0.0,
         ),
     )
     return (response.text or "").strip()

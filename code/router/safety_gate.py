@@ -221,6 +221,14 @@ _DECISIVE_SOLICITATION_PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
     )
 )
 
+# Money actually being asked for, as opposed to a link merely being present.
+# Used only to word a rationale (see `_describe`), never to decide a verdict.
+_MONEY_TOKEN: Final[re.Pattern[str]] = re.compile(
+    r"\b(pay|paid|payment|pending\s+dues?|rs\.?\s*\d|inr|rupees?|amount|fee|"
+    r"charge|challan|penalty|fine|qr|upi|wallet|transfer|refund|token)\b",
+    re.I,
+)
+
 _NEGATION_WINDOW: Final[int] = 40
 _NEGATION_CUE: Final[re.Pattern[str]] = re.compile(
     r"\b(do\s+not|don'?t|never|no\s+one|nobody|avoid|refuse|without)\b", re.I
@@ -432,9 +440,12 @@ def evaluate(
             action="mute",
             message_type="scam",
             signals=("prompt_injection",),
+            # Describes the message, never the machinery reading it: the
+            # output contract forbids reasons that mention system internals,
+            # and "aimed at the routing system" named one.
             rationale=(
-                "Message contains instructions aimed at the routing system, "
-                "which legitimate senders never include."
+                "The message hides commands inside its text, which "
+                "legitimate senders never do."
             ),
         )
 
@@ -467,6 +478,7 @@ def evaluate(
             rationale=_describe(
                 sender_risk.signals,
                 text_signals or frozenset({"credential_request"}),
+                text,
             ),
         )
 
@@ -481,7 +493,7 @@ def evaluate(
             action="mute",
             message_type="scam",
             signals=signals,
-            rationale=_describe(sender_risk.signals, text_signals),
+            rationale=_describe(sender_risk.signals, text_signals, text),
         )
 
     # 5. A suspicious sender with no fraud language is unwanted bulk mail
@@ -501,12 +513,28 @@ def evaluate(
     return SafetyVerdict.clear()
 
 
-def _describe(sender_signals: frozenset[str], text_signals: frozenset[str]) -> str:
-    """Plain-language rationale. Never mentions system internals or scores."""
+def _describe(
+    sender_signals: frozenset[str], text_signals: frozenset[str], text: str = ""
+) -> str:
+    """Plain-language rationale. Never mentions system internals or scores.
+
+    ``text`` only refines *wording*, never whether the gate triggers: the
+    signal set is computed elsewhere and passed in already decided. This
+    matters because `_PAYMENT_COERCION_PATTERNS` matches a bare "this link",
+    so a pure credential-phishing message ("verify through this link
+    immediately") raised `payment_pressure` and was then described as
+    demanding a payment it never mentions. Narrowing the pattern would have
+    changed which messages trigger; checking here cannot.
+    """
     if "credential_request" in text_signals:
         core = "asks for one-time codes or card details"
     elif "payment_pressure" in text_signals:
-        core = "pushes for a payment through an unusual channel"
+        mentions_money = _MONEY_TOKEN.search(text) is not None
+        core = (
+            "pushes for a payment through an unusual channel"
+            if mentions_money or not text
+            else "pressures the reader to verify through an unfamiliar link"
+        )
     elif "unrealistic_offer" in text_signals:
         core = "promises a reward that legitimate senders do not offer"
     else:
