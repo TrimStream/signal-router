@@ -241,7 +241,7 @@ def _validate(parsed: Classification, retrieved: list[RetrievedMessage]) -> list
 
 
 def _fallback_message_type(message_row: pd.Series) -> MessageType:
-    """A light, non-LLM guess used only when both LLM attempts fail validation.
+    """A light, non-LLM guess used only when a real classification isn't available.
 
     Deliberately conservative: a safety net, not a classifier.
     """
@@ -250,6 +250,31 @@ def _fallback_message_type(message_row: pd.Series) -> MessageType:
     if int(message_row.get("forwarded_count") or 0) > 0:
         return "forward"
     return "unknown"
+
+
+def build_fallback_classification(message_row: pd.Series) -> Classification:
+    """The safe-default classification used whenever a real one isn't available.
+
+    Public because it serves two distinct failure modes that live in different
+    modules: this module's own retry-exhaustion path below, and a total
+    pipeline exception in the entry point (retrieval/gate/media raising, not
+    just an LLM validation failure) — both need the exact same safe answer, so
+    there is one implementation rather than two that could quietly drift apart.
+
+    Always `digest`: never risks suppressing a message (`mute` would) and
+    never risks a false interruption (`notify` would). The reason text stays
+    generic and never exposes *why* the fallback fired — that would leak
+    system internals into user-facing content, which the output contract
+    forbids regardless of the cause.
+    """
+    return Classification(
+        action="digest",
+        message_type=_fallback_message_type(message_row),
+        reason="The message did not clearly match a known pattern, so it "
+        "is held for later review rather than surfaced immediately.",
+        confidence=CONFIDENCE_BANDS["digest"][0],
+        evidence_message_ids="none",
+    )
 
 
 def _safety_gate_outcome(verdict: SafetyVerdict) -> ClassifyOutcome:
@@ -270,14 +295,7 @@ def _fallback_outcome(
     message_row: pd.Series, raw_response: str | None, errors: tuple[str, ...]
 ) -> ClassifyOutcome:
     return ClassifyOutcome(
-        classification=Classification(
-            action="digest",
-            message_type=_fallback_message_type(message_row),
-            reason="The message did not clearly match a known pattern, so it "
-            "is held for later review rather than surfaced immediately.",
-            confidence=CONFIDENCE_BANDS["digest"][0],
-            evidence_message_ids="none",
-        ),
+        classification=build_fallback_classification(message_row),
         source="fallback",
         raw_response=raw_response,
         validation_errors=errors,
